@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MiniPlanet — симуляция планеты в браузере</title>
+  <style>
+    :root{
+      --bg:#0f1220; --panel:#171a2a; --ink:#e7e9f7; --muted:#9aa3b2; --accent:#7bdcff;
+      --good:#00c985; --warn:#ffb020; --bad:#ff5d7d;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#0f1220,#0b0e1a);color:var(--ink)}
+    header{display:flex;gap:.75rem;align-items:center;padding:1rem 1.25rem;border-bottom:1px solid #22263a;background:linear-gradient(180deg,#14172a,#101325)}
+    header h1{margin:0;font-size:1.05rem;font-weight:700;letter-spacing:.3px}
+    header .badge{font-size:.75rem;color:#0b1220;background:var(--accent);padding:.15rem .5rem;border-radius:.5rem}
+    main{display:grid;grid-template-columns:320px 1fr;gap:1rem;padding:1rem;min-height:calc(100% - 60px)}
+    aside{background:var(--panel);border:1px solid #232742;border-radius:14px;padding:1rem;display:flex;flex-direction:column;gap:.75rem}
+    .group{border-top:1px dashed #2b3050;padding-top:.75rem;margin-top:.25rem}
+    .row{display:flex;gap:.5rem;align-items:center;justify-content:space-between}
+    label{font-size:.85rem;color:var(--muted)}
+    input[type=range]{width:58%}
+    input[type=number]{width:100px;background:#0f1220;border:1px solid #323659;color:var(--ink);padding:.35rem .5rem;border-radius:.5rem}
+    .btns{display:flex;gap:.5rem;flex-wrap:wrap}
+    button{background:#1f2440;color:var(--ink);border:1px solid #2b305e;padding:.5rem .75rem;border-radius:.6rem;cursor:pointer}
+    button.primary{background:#233c64;border-color:#2f75ad}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin:.5rem 0}
+    .card{background:var(--panel);border:1px solid #232742;border-radius:14px;padding:.75rem}
+    .card h3{margin:.1rem 0 .5rem;font-size:.85rem;color:var(--muted)}
+    .stat{font-size:1.2rem;font-weight:700}
+    .stat small{font-size:.75rem;color:var(--muted);font-weight:500;margin-left:.25rem}
+    canvas{display:block;background:#0b0f1f;border:1px solid #232742;border-radius:14px; cursor: crosshair;}
+    .hint{color:var(--muted);font-size:.8rem}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;}
+    footer{padding:.75rem 1rem;color:var(--muted);font-size:.8rem}
+    /* WebGL sphere canvas */
+    #planetWrap{display:grid;grid-template-columns:480px 1fr;gap:1rem;align-items:start; position: relative;}
+    #life2d{position:absolute; left:0; top:0; width:480px; height:480px; pointer-events:none; border-radius:999px;}
+    #zoomBadge{position:absolute; left:8px; bottom:8px; background:rgba(8,10,20,.75); border:1px solid #2b3050; color:#9ddcff; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:.75rem; padding:.2rem .4rem; border-radius:.35rem; display:none;}
+    
+    #globe3d{width:480px;height:480px;border-radius:999px;border:1px solid #232742;display:block;background:#060914}
+    #tooltip{
+        position:absolute; display:none; background:rgba(15, 18, 32, 0.9); border:1px solid var(--accent);
+        color:var(--accent); padding: .4rem .7rem; border-radius:.5rem; font-size: .9rem;
+        pointer-events:none; transform: translate(-50%, -130%); backdrop-filter: blur(4px);
+        font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="badge">MiniPlanet</span>
+    <h1>Браузерная симуляция планеты · изменяй атмосферу, воду и экосистему — смотри реакцию</h1>
+  </header>
+  <main>
+    <aside>
+      <div class="btns">
+        <button id="play" class="primary">▶ Старт</button>
+        <button id="pause">⏸ Пауза</button>
+        <button id="step">⏭ Шаг</button>
+        <button id="reset">⟲ Сброс</button>
+      </div>
+      <div class="group">
+        <div class="row"><label>Длительность шага (ч)</label><input id="dtHours" type="number" min="1" max="24" step="1" value="6"></div>
+        <div class="row"><label>Скорость ×</label><input id="speed" type="number" min="1" max="512" step="1" value="32"></div>
+      </div>
+      <div class="group">
+        <h3 class="hint">Контроль температуры</h3>
+        <div class="row"><label>Целевая T (°C)</label><input id="tempTarget" type="range" min="-50" max="80" step="0.5" value="20"><span class="mono" id="tempTargetV">20.0</span></div>
+        <div class="row"><label>Сила регулирования</label><input id="tempGain" type="range" min="0" max="0.5" step="0.01" value="0.10"><span class="mono" id="tempGainV">0.10</span></div>
+        <div class="row"><label>Тепловая инерция (дней)</label><input id="heatInertia" type="range" min="1" max="365" step="1" value="60"><span class="mono" id="heatInertiaV">60</span></div>
+        <div class="row"><label>Держать температуру</label><input id="tempHold" type="checkbox"></div>
+      </div>
+      <div class="group">
+        <h3 class="hint">Атмосфера</h3>
+        <div class="row"><label>CO₂ (доля)</label><input id="co2" type="range" min="0.0001" max="0.02" step="0.0001" value="0.008"><span class="mono" id="co2v">0.0080</span></div>
+        <div class="row"><label>Облачность</label><input id="cloud" type="range" min="0" max="1" step="0.01" value="0.48"><span class="mono" id="cloudv">0.48</span></div>
+        <div class="row"><label>Аэрозоли</label><input id="aerosol" type="range" min="0" max="0.1" step="0.001" value="0.02"><span class="mono" id="aerosolv">0.020</span></div>
+      </div>
+      <div class="group">
+        <h3 class="hint">Вода и поверхность</h3>
+        <div class="row"><label>Суша (доля)</label><input id="land" type="range" min="0.2" max="0.9" step="0.01" value="0.45"><span class="mono" id="landv">0.45</span></div>
+        <div class="row"><label>Уровень моря</label><input id="sea" type="range" min="-0.2" max="0.2" step="0.005" value="0"><span class="mono" id="seav">0.00</span></div>
+        <div class="row"><label>Озёра</label><input id="lakes" type="range" min="0" max="0.2" step="0.005" value="0.03"><span class="mono" id="lakesv">0.03</span></div>
+        <div class="row"><label>Реки</label><input id="rivers" type="range" min="0" max="1" step="0.01" value="0.20"><span class="mono" id="riversv">0.20</span></div>
+        <div class="row"><label>Солёность (PSU)</label><input id="sal" type="range" min="5" max="45" step="1" value="32"><span class="mono" id="salv">32</span></div>
+        <div class="row"><label>ΔT (°C) оффсет</label><input id="tempOff" type="range" min="-10" max="10" step="0.5" value="0"><span class="mono" id="tempOffv">0.0</span></div>
+      </div>
+      <div class="group">
+        <h3 class="hint">Биомы суши (сумма = доля суши)</h3>
+        <div class="row"><label>Лес</label><input id="b_forest" type="range" min="0" max="0.9" step="0.01" value="0.18"><span class="mono" id="b_forestv">0.18</span></div>
+        <div class="row"><label>Саванна</label><input id="b_savanna" type="range" min="0" max="0.9" step="0.01" value="0.12"><span class="mono" id="b_savannav">0.12</span></div>
+        <div class="row"><label>Тундра</label><input id="b_tundra" type="range" min="0" max="0.9" step="0.01" value="0.08"><span class="mono" id="b_tundrav">0.08</span></div>
+        <div class="row"><label>Пустыня</label><input id="b_desert" type="range" min="0" max="0.9" step="0.01" value="0.07"><span class="mono" id="b_desertv">0.07</span></div>
+        <div class="hint">Изменение ползунков автоматически перенормирует доли так, чтобы сумма = доля суши.</div>
+      </div>
+      <div class="group">
+        <h3 class="hint">Жизнь</h3>
+        <div class="row"><label>Включить жизнь</label><input id="lifeEnabled" type="checkbox" checked></div>
+        <div class="row"><label>Популяция (макс)</label><input id="lifeMax" type="range" min="50" max="1500" step="50" value="400"><span class="mono" id="lifeMaxV">400</span></div>
+        <div class="row"><label>Мутации</label><input id="lifeMut" type="range" min="0" max="0.2" step="0.005" value="0.02"><span class="mono" id="lifeMutV">0.020</span></div>
+        <div class="row"><label>Зум жизни</label><input id="lifeZoom" type="range" min="1" max="3" step="0.01" value="1"><span class="mono" id="lifeZoomV">1.00×</span></div>
+        <div class="hint">Жизнь видна только при зуме &gt; 1.2×. Колёсико мыши над планетой тоже меняет зум.</div>
+      </div>
+      <div class="group">
+        <h3 class="hint">Катаклизмы</h3>
+        <div class="grid">
+          <button id="cat_volcano">🌋 Вулкан</button>
+          <button id="cat_asteroid">☄️ Астероид</button>
+          <button id="cat_flare">⚡ Солнечная вспышка</button>
+          <button id="cat_flood">🌊 Мегапотоп</button>
+          <button id="cat_heat">🔥 Тепловая волна</button>
+        </div>
+      </div>
+      <div class="group">
+        <h3 class="hint">Снимок состояния</h3>
+        <pre id="snap" class="mono" style="font-size:.75rem;white-space:pre-wrap;background:#0f1220;border:1px solid #2b3050;padding:.5rem;border-radius:.5rem;max-height:180px;overflow:auto"></pre>
+      </div>
+    </aside>
+    <section>
+      <div class="cards">
+        <div class="card"><h3>Глобальная температура</h3><div class="stat"><span id="statT">—</span> <small>°C</small></div></div>
+        <div class="card"><h3>Альбедо</h3><div class="stat"><span id="statA">—</span></div></div>
+        <div class="card"><h3>Лёд</h3><div class="stat"><span id="statIce">—</span> <small>доля</small></div></div>
+      </div>
+      <div id="planetWrap">
+        <canvas id="globe3d" width="480" height="480"></canvas>
+        <canvas id="life2d" width="480" height="480"></canvas>
+        <div id="zoomBadge">1.00×</div>
+        <div id="tooltip"></div>
+      </div>
+    </section>
+  </main>
+  <footer>
+    Модель упрощена (энергетический баланс + обратные связи). Для демонстрации влияния атмосферы/воды/биомов в реальном времени.
+    <span id="testStatus" class="mono" style="margin-left:1rem"></span>
+  </footer>
+
+<script>
+// ------------------ Начальные данные ------------------
+const configBase = {
+  star:{ luminosity_solar:1.0 },
+  planet:{ albedo:0.31, land_fraction:0.45 },
+  atmosphere:{
+    surface_pressure_bar:0.95,
+    composition:{ N2:0.76, O2:0.22, Ar:0.009, CO2:0.008 },
+    greenhouse_factor:1.0,
+    cloud_cover:0.48,
+    aerosol_index:0.02,
+  },
+  hydrology:{ ice_fraction:0.07, lake_fraction:0.03, river_density:0.2, sea_level:0.0, ocean_salinity_psu:32 },
+  biosphere:{ biomes:{ forest:0.18, savanna:0.12, tundra:0.08, desert:0.07 } },
+  climate:{ temp_offset_C:0, temp_target_C:20, temp_gain_per_day:0.1, temp_hold_enabled:false, heat_inertia_days:60, T_app_C:null },
+  life:{ enabled:true, zoom:1.0, mutation:0.02, max:400, entities:[] },
+  dt_hours:6,
+};
+
+function deepClone(o){ return JSON.parse(JSON.stringify(o)); }
+let state0 = deepClone(configBase);
+let state = deepClone(configBase);
+// транзиенты катаклизмов
+const trans = { aerosol:0, luminosity:0, tempC:0 };
+const transHL = { aerosol:180, luminosity:10, tempC:30 }; // полураспады в днях
+
+// ------------------ Вспомогательные функции ------------------
+const S0 = 1361; // солнечная постоянная, Вт/м2
+function greenhouseFromCO2(CO2){ const ref = 0.00028; return 1.0 + 0.8 * Math.log2(Math.max(ref, CO2)/ref); }
+function clamp(x,a,b){ return Math.max(a, Math.min(b,x)); }
+function aerosolEffective(p){ return Math.max(0, p.atmosphere.aerosol_index + trans.aerosol); }
+function effectiveAlbedo(p){
+  const cloudTerm = (p.atmosphere.cloud_cover - 0.5)*0.05;
+  const aerosolTerm = clamp(aerosolEffective(p)*0.12, 0, 0.07);
+  const iceTerm = p.hydrology.ice_fraction*0.15;
+  return clamp(p.planet.albedo + cloudTerm + aerosolTerm + iceTerm, 0.05, 0.9);
+}
+function equilibriumTempC(p){
+  const sigma = 5.670374419e-8;
+  const S = S0 * p.star.luminosity_solar * (1 + trans.luminosity);
+  const a = effectiveAlbedo(p);
+  const Te = Math.pow(S*(1-a)/(4*sigma), 0.25);
+  const G = greenhouseFromCO2(p.atmosphere.composition.CO2);
+  return Te*G - 273.15 + p.climate.temp_offset_C + trans.tempC;
+}
+function displayTempC(p){
+  if(p.climate && typeof p.climate.T_app_C === 'number') return p.climate.T_app_C;
+  return equilibriumTempC(p);
+}
+
+function step(p, dtDays){
+  p.atmosphere.greenhouse_factor = greenhouseFromCO2(p.atmosphere.composition.CO2);
+  const Teq = equilibriumTempC(p);
+
+  if(p.climate.temp_hold_enabled){
+    const err = p.climate.temp_target_C - Teq;
+    p.climate.temp_offset_C += err * p.climate.temp_gain_per_day * dtDays;
+  }
+
+  if(p.climate.T_app_C==null || isNaN(p.climate.T_app_C)) p.climate.T_app_C = Teq;
+  const tauH = Math.max(1, p.climate.heat_inertia_days);
+  p.climate.T_app_C += (Teq - p.climate.T_app_C) * (dtDays / tauH);
+
+  const prevIce = p.hydrology.ice_fraction;
+  const iceTarget = clamp(0.35 - 0.02*Teq, 0, 0.9);
+  const tauIce = 2*365;
+  p.hydrology.ice_fraction += (iceTarget - p.hydrology.ice_fraction) * (dtDays/tauIce);
+  p.hydrology.ice_fraction = clamp(p.hydrology.ice_fraction, 0, 0.9);
+  const dIce = Math.max(0, prevIce - p.hydrology.ice_fraction);
+  p.hydrology.sea_level = clamp(p.hydrology.sea_level + dIce * 0.15, -0.2, 0.2);
+
+  const oceanFrac = 1 - p.planet.land_fraction;
+  const evap = Math.max(0, (Teq - 10)/40);
+  const targetCloud = clamp(0.35 + 0.4*oceanFrac*evap, 0, 1);
+  const tauCloud = 15;
+  p.atmosphere.cloud_cover += (targetCloud - p.atmosphere.cloud_cover) * (dtDays/tauCloud);
+  p.atmosphere.cloud_cover = clamp(p.atmosphere.cloud_cover, 0, 1);
+
+  const land = p.planet.land_fraction;
+  const b = p.biosphere.biomes;
+  const drought = clamp((Teq - 25)/20, 0, 1) * clamp(0.5 - p.atmosphere.cloud_cover, 0, 0.5) * 2;
+  const greening = clamp((15 - Teq)/15, 0, 1) * clamp(p.atmosphere.cloud_cover - 0.6, 0, 0.4) * 2;
+  const moveBurn = drought * 0.02 * dtDays;
+  const moveGreen = greening * 0.015 * dtDays;
+  const burnAmt = Math.min(b.forest, moveBurn);
+  b.forest -= burnAmt*0.6; b.savanna += burnAmt*0.3; b.desert += burnAmt*0.3;
+  const greenPool = Math.min(b.desert + b.savanna*0.5, moveGreen);
+  const takeDes = Math.min(b.desert, greenPool*0.7);
+  const takeSav = Math.min(b.savanna, (greenPool - takeDes));
+  b.desert -= takeDes; b.savanna -= takeSav; b.forest += (takeDes + takeSav);
+  const tundraShift = clamp((Teq-0)/30,0,1) * 0.01 * dtDays;
+  const tundraToSav = Math.min(b.tundra, tundraShift);
+  b.tundra -= tundraToSav; b.savanna += tundraToSav;
+  const sumB = (b.forest + b.savanna + b.tundra + b.desert) || 1;
+  const scale = land / sumB;
+  b.forest *= scale; b.savanna *= scale; b.tundra *= scale; b.desert *= scale;
+
+  const lakeEvap = evap * 0.02 * dtDays;
+  const lakeMelt = dIce * 0.3;
+  p.hydrology.lake_fraction = clamp(p.hydrology.lake_fraction - lakeEvap + lakeMelt, 0, 0.2);
+  p.hydrology.river_density = clamp(p.hydrology.river_density - evap*0.01*dtDays + (1-evap)*0.005*dtDays, 0, 1);
+
+  const nppBase = 2.2;
+  const forestGain = 1.6, savannaGain = 1.0, tundraGain = 0.4, desertGain = 0.1;
+  const drawdown = (nppBase*(
+      b.forest*forestGain +
+      b.savanna*savannaGain +
+      b.tundra*tundraGain +
+      b.desert*desertGain
+    )/Math.max(1e-6,land)) * 1e-6;
+  const relax = 0.00001 * (p.atmosphere.composition.CO2 - 0.0004);
+  p.atmosphere.composition.CO2 = clamp(p.atmosphere.composition.CO2 - drawdown*dtDays - relax*dtDays, 1e-5, 5e-2);
+
+  return Teq;
+}
+
+// ------------------ UI/Рендер ------------------
+const el = (id)=>document.getElementById(id);
+const canvasGl = el('globe3d');
+const canvasLife = el('life2d');
+const zoomBadge = el('zoomBadge');
+let gl = null, program = null; let buf = null; let uniforms = {}; let a = {}; let uTimeStart = performance.now();
+
+function refreshStats(){
+  const Teq = equilibriumTempC(state);
+  const Tdisp = displayTempC(state);
+  el('statT').textContent = Tdisp.toFixed(2);
+  el('statA').textContent = effectiveAlbedo(state).toFixed(3);
+  el('statIce').textContent = state.hydrology.ice_fraction.toFixed(3);
+  el('co2v').textContent = state.atmosphere.composition.CO2.toFixed(4);
+  el('cloudv').textContent = state.atmosphere.cloud_cover.toFixed(2);
+  el('aerosolv').textContent = state.atmosphere.aerosol_index.toFixed(3);
+  el('b_forestv').textContent = state.biosphere.biomes.forest.toFixed(2);
+  el('b_savannav').textContent = state.biosphere.biomes.savanna.toFixed(2);
+  el('b_tundrav').textContent = state.biosphere.biomes.tundra.toFixed(2);
+  el('b_desertv').textContent = state.biosphere.biomes.desert.toFixed(2);
+  el('landv').textContent = state.planet.land_fraction.toFixed(2);
+  el('seav').textContent = state.hydrology.sea_level.toFixed(2);
+  el('lakesv').textContent = state.hydrology.lake_fraction.toFixed(2);
+  el('riversv').textContent = state.hydrology.river_density.toFixed(2);
+  el('salv').textContent = state.hydrology.ocean_salinity_psu.toFixed(0);
+  el('tempOffv').textContent = state.climate.temp_offset_C.toFixed(1);
+  el('tempTargetV').textContent = state.climate.temp_target_C.toFixed(1);
+  el('tempGainV').textContent = state.climate.temp_gain_per_day.toFixed(2);
+  el('heatInertiaV').textContent = state.climate.heat_inertia_days.toFixed(0);
+  el('tempHold').checked = !!state.climate.temp_hold_enabled;
+  if(state.life){
+    el('lifeEnabled').checked = !!state.life.enabled;
+    el('lifeMax').value = state.life.max; el('lifeMaxV').textContent = state.life.max;
+    el('lifeMut').value = state.life.mutation; el('lifeMutV').textContent = state.life.mutation.toFixed(3);
+    el('lifeZoom').value = state.life.zoom; el('lifeZoomV').textContent = (state.life.zoom||1).toFixed(2)+'×';
+  }
+  el('snap').textContent = JSON.stringify({
+    day: sim.day.toFixed(1),
+    T_eq: Teq.toFixed(3),
+    T_disp: Tdisp.toFixed(3),
+    albedo: effectiveAlbedo(state).toFixed(3),
+    ice: state.hydrology.ice_fraction.toFixed(3),
+    CO2: state.atmosphere.composition.CO2.toExponential(3),
+    cloud: state.atmosphere.cloud_cover.toFixed(3)
+  }, null, 2);
+  if (gl && program) drawGlobe3D();
+  drawLife();
+}
+
+// ------------------ Симуляция ------------------
+// --- Жизнь: вспомогательные ---
+function rngHash2(lat, lon){ // стабильный [0..1]
+  const s = Math.sin(lat*12.9898 + lon*78.233)*43758.5453; return s - Math.floor(s);
+}
+function surfaceNoise(lat, lon){ // fbm-подобный дешёвый
+  let v=0, a=0.5, f=1.0; for(let i=0;i<4;i++){ v += a*(rngHash2(lat*f, lon*f)); a*=0.5; f*=2.0; } return v;
+}
+function isOceanLL(lat, lon){
+  const base = surfaceNoise(lat, lon);
+  const thr = clamp(1.0 - state.planet.land_fraction + state.hydrology.sea_level, 0, 1);
+  return base < thr;
+}
+function projectLLToScreen(lat, lon){
+  const ang = ((performance.now()-uTimeStart)/1000)*0.2; const ca=Math.cos(ang), sa=Math.sin(ang);
+  const cx = Math.cos(lat)*Math.cos(lon), cy = Math.sin(lat), cz = Math.cos(lat)*Math.sin(lon);
+  const rx = ca*cx + sa*cz, ry = cy, rz = -sa*cx + ca*cz;
+  const R = canvasGl.width*0.5; const cxp = canvasGl.width*0.5 + rx*R; const cyp = canvasGl.height*0.5 + ry*R;
+  return {x:cxp, y:cyp, front: rz>0};
+}
+function localTempAt(lat){
+  const globalT = displayTempC(state); const d = EQUATOR_TO_POLE_TEMP_DIFF; return globalT - d*(Math.abs(lat)/(Math.PI/2));
+}
+function localMoistureAt(lat, ocean){ // 0..1
+  if(ocean) return 0.9;
+  const equ = 1 - Math.abs(lat)/(Math.PI/2); return clamp(0.2 + 0.8*equ*state.atmosphere.cloud_cover, 0, 1);
+}
+// --- Жизнь: модель ---
+function ensureLifeSeeds(){
+  if(!state.life.entities || state.life.entities.length===0){
+    state.life.entities = [];
+    for(let i=0;i<Math.min(150, state.life.max); i++){
+      let lat = (Math.random()*2-1)*(Math.PI/2);
+      let lon = (Math.random()*2-1)*Math.PI;
+      if(!isOceanLL(lat,lon)) { i--; continue; } // стартуем в океане
+      state.life.entities.push({ lat, lon, stage:0, temp_opt:18+Math.random()*8, moist_opt:0.7, sal_opt:32, energy:1, age:0 });
+    }
+  }
+}
+function lifeStep(dtDays){
+  if(!state.life.enabled) return;
+  ensureLifeSeeds();
+  const ents = state.life.entities; const maxN = state.life.max|0; const mut = state.life.mutation||0.02;
+  const sigmaT=10, sigmaSal=6, sigmaM=0.2;
+  const sal = state.hydrology.ocean_salinity_psu;
+  const next=[];
+  for(let i=0;i<ents.length;i++){
+    const e = ents[i];
+    const ocean = isOceanLL(e.lat, e.lon);
+    const T = localTempAt(e.lat);
+    const M = localMoistureAt(e.lat, ocean);
+    const fitT = Math.exp(-Math.pow(T - e.temp_opt,2)/(2*sigmaT*sigmaT));
+    const fitSal = ocean ? Math.exp(-Math.pow(sal - e.sal_opt,2)/(2*sigmaSal*sigmaSal)) : 1.0;
+    const fitM = Math.exp(-Math.pow(M - e.moist_opt,2)/(2*sigmaM*sigmaM));
+    const fitness = clamp(0.25*fitT + 0.35*fitM + 0.4*fitSal, 0, 1);
+    e.energy += (fitness-0.5)*0.04*dtDays; // рост/убыль
+    e.energy = clamp(e.energy, 0, 3);
+    e.age += dtDays;
+    // простое блуждание и слабая дрейфовая миграция к оптимуму
+    e.lat = clamp(e.lat + (Math.random()-0.5)*0.02, -Math.PI/2, Math.PI/2);
+    e.lon += (Math.random()-0.5)*0.03; if(e.lon>Math.PI) e.lon-=2*Math.PI; if(e.lon<-Math.PI) e.lon+=2*Math.PI;
+    // переход на сушу при достаточной энергии и влажности
+    if(e.stage>=1 && !ocean && M>0.5 && e.energy>1.2 && Math.random()<0.02*dtDays){ e.stage = Math.min(2, e.stage+1); }
+    if(e.stage===0 && !ocean && Math.random()<0.01*dtDays){ e.stage=1; }
+    // размножение
+    if(e.energy>1.5 && next.length < maxN){
+      const child = {...e};
+      child.energy = 1.0; child.age = 0;
+      child.temp_opt += (Math.random()-0.5)*mut*40;
+      child.moist_opt = clamp(child.moist_opt + (Math.random()-0.5)*mut*2, 0, 1);
+      child.sal_opt = clamp(child.sal_opt + (Math.random()-0.5)*mut*60, 5, 45);
+      if(Math.random()<0.2) child.stage = Math.min(2, child.stage + (Math.random()<0.5?1:0));
+      next.push(child);
+      e.energy -= 0.5;
+    }
+    // смерть
+    if(e.energy<=0 || e.age>2000){ continue; }
+    next.push(e);
+  }
+  // если перенаселение, подрежем случайно
+  while(next.length>maxN) next.splice((Math.random()*next.length)|0,1);
+  state.life.entities = next;
+}
+function drawLife(){
+  const z = state.life.zoom||1; const show = z>1.2 && state.life.enabled; const ctx = canvasLife.getContext('2d');
+  ctx.clearRect(0,0,canvasLife.width, canvasLife.height);
+  zoomBadge.style.display = 'block'; zoomBadge.textContent = `${z.toFixed(2)}×`;
+  if(!show) return;
+  ctx.save();
+  const cx = canvasLife.width/2, cy = canvasLife.height/2; ctx.translate(cx, cy); ctx.scale(z, z); ctx.translate(-cx, -cy);
+  const ents = state.life.entities||[];
+  for(let i=0;i<ents.length;i++){
+    const e=ents[i]; const p = projectLLToScreen(e.lat, e.lon); if(!p.front) continue;
+    // не рисуем если точка выходит за круг
+    const dx=p.x-cx, dy=p.y-cy; if(dx*dx+dy*dy>cx*cx) continue;
+    const r = 1.0 + e.stage*0.8 * z; // размер растёт со стадией и зумом
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+    if(e.stage===0) ctx.fillStyle = '#9bf9a1'; else if(e.stage===1) ctx.fillStyle='#84d4ff'; else ctx.fillStyle='#ffcf6b';
+    ctx.globalAlpha = 0.9; ctx.fill();
+  }
+  ctx.restore();
+}
+
+const sim = { running:false, day:0, speed:32 };
+let rafId = null, lastFrame=0;
+
+function tick(ts){
+  if(!sim.running){ return; }
+  if(!lastFrame) lastFrame = ts;
+  const elapsed = Math.min(64, ts - lastFrame); // ms
+  lastFrame = ts;
+  const dtHours = Number(el('dtHours').value);
+  const steps = Math.max(1, Math.floor(sim.speed * elapsed/16));
+  for(let i=0;i<steps;i++){
+    step(state, dtHours/24);
+    lifeStep(dtHours/24);
+    const kA = Math.pow(0.5, (dtHours/24)/transHL.aerosol);
+    const kL = Math.pow(0.5, (dtHours/24)/transHL.luminosity);
+    const kT = Math.pow(0.5, (dtHours/24)/transHL.tempC);
+    trans.aerosol *= kA; trans.luminosity *= kL; trans.tempC *= kT;
+    sim.day += dtHours/24;
+  }
+  refreshStats();
+  rafId = requestAnimationFrame(tick);
+}
+
+function start() {
+    if (!sim.running) {
+        sim.running = true;
+        lastFrame = 0;
+        rafId = requestAnimationFrame(tick);
+        el('tooltip').style.display = 'none'; // Скрываем подсказку при старте
+    }
+}
+function pause(){ sim.running=false; if(rafId) cancelAnimationFrame(rafId); }
+function reset(){ pause(); state=deepClone(state0); sim.day=0; refreshStats(); }
+function stepOnce(){ const dtHours = Number(el('dtHours').value); step(state, dtHours/24);
+    lifeStep(dtHours/24); sim.day += dtHours/24; refreshStats(); }
+
+// ------------------ Слушатели UI ------------------
+el('play').onclick = start; el('pause').onclick = pause; el('reset').onclick = reset; el('step').onclick = stepOnce;
+el('speed').oninput = e=>{ sim.speed = Number(e.target.value); };
+// Атмосфера
+el('co2').oninput = e=>{ state.atmosphere.composition.CO2 = Number(e.target.value); el('co2v').textContent=Number(e.target.value).toFixed(4); refreshStats(); };
+el('cloud').oninput = e=>{ state.atmosphere.cloud_cover = Number(e.target.value); refreshStats(); };
+el('aerosol').oninput = e=>{ state.atmosphere.aerosol_index = Number(e.target.value); refreshStats(); };
+// Биомы и поверхность
+function renormBiomes(){
+  const land = state.planet.land_fraction;
+  const vals = [Number(el('b_forest').value), Number(el('b_savanna').value), Number(el('b_tundra').value), Number(el('b_desert').value)];
+  const sum = vals.reduce((a,b)=>a+b,0) || 1;
+  const scale = land/sum;
+  state.biosphere.biomes.forest = vals[0]*scale;
+  state.biosphere.biomes.savanna = vals[1]*scale;
+  state.biosphere.biomes.tundra = vals[2]*scale;
+  state.biosphere.biomes.desert = vals[3]*scale;
+  el('b_forestv').textContent = state.biosphere.biomes.forest.toFixed(2);
+  el('b_savannav').textContent = state.biosphere.biomes.savanna.toFixed(2);
+  el('b_tundrav').textContent = state.biosphere.biomes.tundra.toFixed(2);
+  el('b_desertv').textContent = state.biosphere.biomes.desert.toFixed(2);
+  refreshStats();
+}
+['b_forest','b_savanna','b_tundra','b_desert'].forEach(id=>{ el(id).oninput = renormBiomes; });
+el('land').oninput = e=>{ state.planet.land_fraction = Number(e.target.value); el('landv').textContent=state.planet.land_fraction.toFixed(2); renormBiomes(); };
+el('sea').oninput = e=>{ state.hydrology.sea_level = Number(e.target.value); el('seav').textContent=state.hydrology.sea_level.toFixed(2); refreshStats(); };
+el('lakes').oninput = e=>{ state.hydrology.lake_fraction = Number(e.target.value); el('lakesv').textContent=state.hydrology.lake_fraction.toFixed(2); refreshStats(); };
+el('rivers').oninput = e=>{ state.hydrology.river_density = Number(e.target.value); el('riversv').textContent=state.hydrology.river_density.toFixed(2); refreshStats(); };
+el('sal').oninput = e=>{ state.hydrology.ocean_salinity_psu = Number(e.target.value); el('salv').textContent=state.hydrology.ocean_salinity_psu.toFixed(0); refreshStats(); };
+el('tempOff').oninput = e=>{ state.climate.temp_offset_C = Number(e.target.value); el('tempOffv').textContent=state.climate.temp_offset_C.toFixed(1); refreshStats(); };
+// Контроль температуры
+el('tempTarget').oninput = e=>{ state.climate.temp_target_C = Number(e.target.value); el('tempTargetV').textContent = state.climate.temp_target_C.toFixed(1); refreshStats(); };
+el('tempGain').oninput = e=>{ state.climate.temp_gain_per_day = Number(e.target.value); el('tempGainV').textContent = state.climate.temp_gain_per_day.toFixed(2); };
+el('heatInertia').oninput = e=>{ state.climate.heat_inertia_days = Number(e.target.value); el('heatInertiaV').textContent = state.climate.heat_inertia_days.toFixed(0); };
+el('tempHold').onchange = e=>{ state.climate.temp_hold_enabled = e.target.checked; };
+// Жизнь UI
+el('lifeEnabled').onchange = e=>{ state.life.enabled = e.target.checked; if(state.life.enabled) ensureLifeSeeds(); };
+el('lifeMax').oninput = e=>{ state.life.max = Number(e.target.value); el('lifeMaxV').textContent = state.life.max; };
+el('lifeMut').oninput = e=>{ state.life.mutation = Number(e.target.value); el('lifeMutV').textContent = state.life.mutation.toFixed(3); };
+el('lifeZoom').oninput = e=>{ state.life.zoom = Number(e.target.value); el('lifeZoomV').textContent = state.life.zoom.toFixed(2)+'×'; drawLife(); };
+canvasGl.addEventListener('wheel', (ev)=>{
+  const z = (state.life.zoom||1) + (ev.deltaY>0? -0.1: 0.1);
+  state.life.zoom = clamp(z, 1, 3);
+  el('lifeZoom').value = state.life.zoom; el('lifeZoomV').textContent = state.life.zoom.toFixed(2)+'×'; drawLife(); ev.preventDefault();
+}, {passive:false});
+
+// Катаклизмы
+el('cat_volcano').onclick=()=>{ trans.aerosol += 0.06; transHL.aerosol = 240; refreshStats(); };
+el('cat_asteroid').onclick=()=>{ trans.aerosol += 0.1; trans.tempC -= 3; transHL.aerosol=365; transHL.tempC=60; refreshStats(); };
+el('cat_flare').onclick=()=>{ trans.luminosity += 0.05; transHL.luminosity=5; refreshStats(); };
+el('cat_flood').onclick=()=>{ state.hydrology.sea_level = clamp(state.hydrology.sea_level + 0.05, -0.2, 0.2); refreshStats(); };
+el('cat_heat').onclick=()=>{ trans.tempC += 3; transHL.tempC=20; refreshStats(); };
+
+// ------------------ Локальная температура по наведению (во время паузы) ------------------
+const EQUATOR_TO_POLE_TEMP_DIFF = 30; // Разница температур в °C между экватором и полюсом
+
+function showLocalTemp(event) {
+    const rect = canvasGl.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+
+    // Преобразуем координаты в WebGL NDC (-1 to +1)
+    const ndcX = (x / canvasGl.width) * 2 - 1;
+    const ndcY = 1 - (y / canvasGl.height) * 2;
+
+    const d2 = ndcX * ndcX + ndcY * ndcY;
+    const tooltip = el('tooltip');
+
+    if (d2 > 1.0) { // Курсор за пределами сферы
+        tooltip.style.display = 'none';
+        return; 
+    }
+
+    const z = Math.sqrt(1.0 - d2);
+    const n = { x: ndcX, y: ndcY, z: z }; // Точка на видимой поверхности сферы
+
+    // "Разворачиваем" планету обратно, чтобы получить статическую широту
+    const time = (performance.now() - uTimeStart) / 1000;
+    const ang = time * 0.2;
+    const ca = Math.cos(-ang); // обратный угол
+    const sa = Math.sin(-ang);
+    const unrotatedPoint = {
+        x: ca * n.x + sa * n.z,
+        y: n.y,
+        z: -sa * n.x + ca * n.z
+    };
+    
+    const latRadians = Math.asin(unrotatedPoint.y);
+    const globalT = displayTempC(state);
+    
+    // Простая модель: температура линейно падает от экватора к полюсу
+    const localT = globalT - EQUATOR_TO_POLE_TEMP_DIFF * (Math.abs(latRadians) / (Math.PI / 2));
+
+    // Показываем и позиционируем подсказку
+    tooltip.innerHTML = `~${localT.toFixed(1)} °C`;
+    tooltip.style.left = `${x}px`;
+    tooltip.style.top = `${y}px`;
+    tooltip.style.display = 'block';
+}
+
+canvasGl.addEventListener('mousemove', (event) => {
+    if (!sim.running) { // Показываем только если симуляция на паузе
+        showLocalTemp(event);
+    }
+});
+
+canvasGl.addEventListener('mouseleave', () => {
+    el('tooltip').style.display = 'none'; // Скрываем, когда мышь уходит с холста
+});
+
+
+// ------------------ WebGL 3D Sphere ------------------
+function makeShader(gl, type, source){ const sh = gl.createShader(type); gl.shaderSource(sh, source); gl.compileShader(sh); if(!gl.getShaderParameter(sh, gl.COMPILE_STATUS)){ console.error(gl.getShaderInfoLog(sh)); throw new Error('Shader compile failed'); } return sh; }
+function makeProgram(gl, vs, fs){ const p = gl.createProgram(); gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p); if(!gl.getProgramParameter(p, gl.LINK_STATUS)){ console.error(gl.getProgramInfoLog(p)); throw new Error('Program link failed'); } return p; }
+function initGlobe3D(){
+  if(!canvasGl) return;
+  gl = canvasGl.getContext('webgl'); if(!gl) return;
+  const VS = `
+  attribute vec2 aPos; varying vec2 vUV; void main(){ vUV = aPos*0.5+0.5; gl_Position = vec4(aPos,0.0,1.0); }
+  `;
+  const FS = `
+  precision highp float; varying vec2 vUV; uniform vec2 uRes; uniform float uTime; 
+  uniform float uCloud; uniform float uAerosol; uniform float uIce; uniform float uTemp; uniform float uLandFrac; uniform vec4 uBiomes;
+  uniform float uSea; uniform float uLakeFrac; uniform float uRiver; uniform float uSalinity;
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p){ vec2 i=floor(p), f=fract(p), u=f*f*(3.0-2.0*f);
+    float a=hash(i+vec2(0.0,0.0)), b=hash(i+vec2(1.0,0.0)), c=hash(i+vec2(0.0,1.0)), d=hash(i+vec2(1.0,1.0));
+    return mix(mix(a,b,u.x), mix(c,d,u.x), u.y); }
+  float fbm(vec2 p){ float v=0.0, a=0.5; for(int i=0;i<5;i++){ v+=a*noise(p); p*=2.0; a*=0.5; } return v; }
+  vec3 hex(vec3 h){ return h/255.0; }
+  vec3 mix3(vec3 a, vec3 b, float t){ return a*(1.0-t)+b*t; }
+  void main(){
+    vec2 uv = vUV*2.0-1.0; float d2 = dot(uv,uv); if(d2>1.0){ discard; }
+    float z = sqrt(1.0-d2); vec3 n = normalize(vec3(uv.x, uv.y, z));
+    float ang = uTime*0.2; float ca=cos(ang), sa=sin(ang); vec3 nr = vec3(ca*n.x + sa*n.z, n.y, -sa*n.x + ca*n.z);
+    float lon = atan(nr.z, nr.x); float lat = asin(nr.y);
+    float U = (lon/3.14159265 + 1.0)*8.0; float V = (lat/3.14159265 + 0.5)*8.0;
+    float base = fbm(vec2(U*0.6, V*0.6));
+
+    // --- Локальные климатические эффекты ---
+    float absLat = abs(nr.y);
+    
+    vec3 color;
+    bool is_ocean = base < clamp(1.0 - uLandFrac + uSea, 0.0, 1.0);
+
+    vec3 oceanCold = hex(vec3(20.0,58.0,94.0)); vec3 oceanWarm = hex(vec3(26.0,111.0,178.0));
+    
+    if(is_ocean){
+      color = mix3(oceanCold, oceanWarm, clamp(uTemp*1.2,0.0,1.0));
+      float shade = 0.65 + 0.35*max(0.0, dot(n, normalize(vec3(-0.5,-0.4,0.75))));
+      float depth = 0.85 + 0.15*base; color *= shade*depth;
+      float salt = clamp((uSalinity-35.0)/15.0, 0.0, 0.25);
+      color = mix3(color, vec3(0.9,0.95,1.0), salt);
+
+      // Замерзание океана у полюсов при холоде
+      float frost = smoothstep(0.8, 0.95, absLat) * (1.0 - uTemp) * 0.8;
+      color = mix(color, hex(vec3(0xe9,0xf3,0xfb)), clamp(frost, 0.0, 1.0));
+
+    } else { // Суша
+      float t = (base - clamp(1.0 - uLandFrac + uSea, 0.0, 1.0)) / max(1e-3, uLandFrac - uSea);
+      float bf=uBiomes.x, bs=uBiomes.y, bt=uBiomes.z;
+      vec3 forestC=hex(vec3(0x2e,0x8b,0x57)); vec3 savannaC=hex(vec3(0xa3,0xb5,0x4a)); vec3 tundraC=hex(vec3(0xb7,0xd3,0xd3)); vec3 desertC=hex(vec3(0xc9,0xa2,0x6b));
+      if(t < bf) color = forestC; else if(t < bf+bs) color = savannaC; else if(t < bf+bs+bt) color = tundraC; else color = desertC;
+      
+      // Выгорание/засуха в жарком климате у экватора
+      float heat_factor = clamp((uTemp - 0.7) * 2.0, 0.0, 1.0);
+      float scorch_factor = heat_factor * (1.0 - absLat);
+      color = mix(color, hex(vec3(0x7a,0x56,0x33)), scorch_factor * 0.7);
+
+      float shade = 0.55 + 0.45*max(0.0, dot(n, normalize(vec3(-0.5,-0.4,0.75)))); color *= shade;
+      float lakesMask = step(1.0 - uLakeFrac*0.8, fbm(vec2(U*3.0+100.0, V*3.0-40.0)));
+      vec3 lakeCol = mix3(oceanCold, oceanWarm, clamp(uTemp,0.0,1.0));
+      color = mix3(color, lakeCol, 0.8*lakesMask);
+      float rN = abs(noise(vec2(U*4.0, V*4.0))-0.5);
+      float riverLine = smoothstep(0.12, 0.0, rN);
+      color = mix3(color, oceanWarm, clamp(riverLine*uRiver, 0.0, 0.8));
+    }
+
+    // Ледяные шапки
+    float ice_edge = 1.0 - uIce;
+    float melt_factor = smoothstep(0.5, 0.8, uTemp);
+    float melt_amount = melt_factor * 0.3; // Насколько сильно тает край
+    if (absLat > ice_edge - melt_amount) {
+      vec3 iceC = hex(vec3(0xe9,0xf3,0xfb));
+      float t = smoothstep(ice_edge - melt_amount, ice_edge + uIce*0.1, absLat);
+      // Делаем край "мокрым" при таянии
+      iceC = mix(mix(oceanWarm, iceC, 0.6), iceC, 1.0 - melt_factor);
+      color = mix(color, iceC, t);
+    }
+    
+    // Облака
+    float cloud_noise = fbm(vec2(U*1.3 - uTime*0.05 + 50.0, V*1.3-20.0));
+    float cloud_mask = smoothstep(0.6, 1.0, cloud_noise);
+    // Испарение над теплыми океанами
+    float evaporation = 0.0;
+    if(is_ocean){
+      evaporation = (1.0 - absLat) * uTemp * 0.5;
+    }
+    float final_cloud_cover = clamp(uCloud + evaporation*1.5, 0.0, 1.0);
+    float cloud_alpha = 0.7 * cloud_mask * final_cloud_cover;
+    color = mix(color, vec3(1.0), cloud_alpha);
+    // дымка/гарь над перегретой сушей
+    if(!is_ocean){
+      float dryHeat = clamp((uTemp-0.7)*2.0,0.0,1.0) * (1.0 - absLat);
+      color = mix(color, vec3(0.35,0.32,0.30), dryHeat*0.25);
+    }
+
+    // Аэрозоли и атмосферное свечение
+    if(uAerosol>0.0){ float a = clamp(uAerosol*4.0, 0.0, 0.6); color = mix(color, vec3(200.0/255.0,210.0/255.0,210.0/255.0), a); }
+    float rim = pow(1.0 - clamp(z,0.0,1.0), 2.0);
+    color += rim*vec3(120.0,180.0,255.0)/255.0*0.25;
+
+    gl_FragColor = vec4(color, 1.0);
+  }
+  `;
+  const vs = makeShader(gl, gl.VERTEX_SHADER, VS);
+  const fs = makeShader(gl, gl.FRAGMENT_SHADER, FS);
+  program = makeProgram(gl, vs, fs);
+  gl.useProgram(program);
+  buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  const quad = new Float32Array([ -1,-1,  1,-1,  -1,1,  -1, 1,  1,-1,   1,1 ]);
+  gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+  a.aPos = gl.getAttribLocation(program, 'aPos');
+  gl.enableVertexAttribArray(a.aPos); gl.vertexAttribPointer(a.aPos, 2, gl.FLOAT, false, 0, 0);
+  uniforms.uRes = gl.getUniformLocation(program, 'uRes');
+  uniforms.uTime = gl.getUniformLocation(program, 'uTime');
+  uniforms.uCloud = gl.getUniformLocation(program, 'uCloud');
+  uniforms.uAerosol = gl.getUniformLocation(program, 'uAerosol');
+  uniforms.uIce = gl.getUniformLocation(program, 'uIce');
+  uniforms.uTemp = gl.getUniformLocation(program, 'uTemp');
+  uniforms.uLandFrac = gl.getUniformLocation(program, 'uLandFrac');
+  uniforms.uBiomes = gl.getUniformLocation(program, 'uBiomes');
+  uniforms.uSea = gl.getUniformLocation(program, 'uSea');
+  uniforms.uLakeFrac = gl.getUniformLocation(program, 'uLakeFrac');
+  uniforms.uRiver = gl.getUniformLocation(program, 'uRiver');
+  uniforms.uSalinity = gl.getUniformLocation(program, 'uSalinity');
+  gl.viewport(0,0,canvasGl.width, canvasGl.height);
+}
+function drawGlobe3D(){
+  if(state.climate.T_app_C==null || isNaN(state.climate.T_app_C)) state.climate.T_app_C = equilibriumTempC(state);
+  if(!gl) return;
+  const t = (performance.now() - uTimeStart)/1000;
+  const land = state.planet.land_fraction;
+  const b = state.biosphere.biomes; const sum = (b.forest+b.savanna+b.tundra+b.desert)||1;
+  const bf = b.forest/sum, bs=b.savanna/sum, bt=b.tundra/sum; // desert is rest
+  const tempNorm = Math.max(0, Math.min(1, (displayTempC(state)+10)/40));
+  gl.useProgram(program);
+  gl.uniform2f(uniforms.uRes, canvasGl.width, canvasGl.height);
+  gl.uniform1f(uniforms.uTime, t);
+  gl.uniform1f(uniforms.uCloud, state.atmosphere.cloud_cover);
+  gl.uniform1f(uniforms.uAerosol, Math.max(0, state.atmosphere.aerosol_index + trans.aerosol));
+  gl.uniform1f(uniforms.uIce, Math.max(0, Math.min(0.9, state.hydrology.ice_fraction*0.9)));
+  gl.uniform1f(uniforms.uTemp, tempNorm);
+  gl.uniform1f(uniforms.uLandFrac, land);
+  gl.uniform4f(uniforms.uBiomes, bf, bs, bt, 1.0 - (bf+bs+bt));
+  gl.uniform1f(uniforms.uSea, state.hydrology.sea_level);
+  gl.uniform1f(uniforms.uLakeFrac, state.hydrology.lake_fraction);
+  gl.uniform1f(uniforms.uRiver, state.hydrology.river_density);
+  gl.uniform1f(uniforms.uSalinity, state.hydrology.ocean_salinity_psu);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+}
+initGlobe3D();
+
+// ------------------ Тесты (мини) ------------------
+function runTests(){
+  let pass=0, fail=0; const asrt=(cond,msg)=>{ if(cond){pass++;} else {fail++; console.error('TEST FAIL:', msg);} };
+  // базовые
+  asrt(clamp(5,0,10)===5,'clamp mid'); asrt(clamp(-1,0,10)===0,'clamp low'); asrt(clamp(99,0,10)===10,'clamp high');
+  const g1 = greenhouseFromCO2(0.00028); const g2 = greenhouseFromCO2(0.001); asrt(g2>g1,'greenhouse monotonic');
+  const t1 = equilibriumTempC(state);
+  const co2Old = state.atmosphere.composition.CO2;
+  state.atmosphere.composition.CO2 *= 1.1;
+  const t2 = equilibriumTempC(state);
+  state.atmosphere.composition.CO2 = co2Old;
+  asrt(t2>=t1,'temp responds to CO2');
+  // контроллер
+  const s = deepClone(state);
+  s.climate.temp_hold_enabled = true;
+  s.climate.temp_target_C = s.climate.temp_target_C - 5;
+  const offsetBefore = s.climate.temp_offset_C;
+  step(s, 1);
+  asrt(s.climate.temp_offset_C !== offsetBefore, 'temp hold adjusts offset');
+
+  const cold = deepClone(state);
+  const iceBefore = cold.hydrology.ice_fraction;
+  cold.climate.temp_offset_C = -15;
+  step(cold, 30);
+  asrt(cold.hydrology.ice_fraction >= iceBefore, 'ice fraction grows when planet cools');
+
+  return { pass, fail };
+}
+
+const testResults = runTests();
+const statusEl = el('testStatus');
+if(statusEl){
+  if(testResults.fail){
+    statusEl.textContent = `tests: ${testResults.pass} pass / ${testResults.fail} fail`;
+    statusEl.style.color = 'var(--bad)';
+  } else {
+    statusEl.textContent = `tests: ${testResults.pass} pass`;
+    statusEl.style.color = 'var(--good)';
+  }
+}
+
+refreshStats();
+
+</script>
+</body>
+</html>
